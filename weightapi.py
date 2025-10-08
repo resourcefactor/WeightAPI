@@ -1,19 +1,79 @@
 import serial
 import serial.tools.list_ports
 from flask import Flask, jsonify
-from flask_cors import CORS
 from datetime import datetime
 import re
 import threading
 import time
 
 app = Flask(__name__)
-CORS(app)
 
 # Global variable for latest data
 latest_data = None
 data_lock = threading.Lock()
 serial_port = None
+
+# Manual CORS handling
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
+@app.route('/api/weight', methods=['GET', 'OPTIONS'])
+def get_weight_data():
+    """Get recent weight data"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    with data_lock:
+        if latest_data:
+            return jsonify({
+                'Success': True,
+                'Message': 'Weight data retrieved successfully',
+                'Data': [latest_data],
+                'Count': 1,
+                'Timestamp': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                'Success': False,
+                'Error': 'No weight data available',
+                'Timestamp': datetime.now().isoformat()
+            }), 404
+
+@app.route('/api/weight/latest', methods=['GET', 'OPTIONS'])
+def get_latest_weight_data():
+    """Get latest weight data"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    with data_lock:
+        if latest_data:
+            return jsonify({
+                'Success': True,
+                'Message': 'Latest weight data retrieved successfully',
+                'Data': latest_data,
+                'Timestamp': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                'Success': False,
+                'Error': 'No weight data available',
+                'Timestamp': datetime.now().isoformat()
+            }), 404
+
+@app.route('/api/weight/health', methods=['GET', 'OPTIONS'])
+def health_check():
+    """Health check endpoint"""
+    if request.method == 'OPTIONS':
+        return '', 200
+    port_status = "connected" if serial_port and serial_port.is_open else "disconnected"
+    return jsonify({
+        'Status': 'Healthy',
+        'Timestamp': datetime.now().isoformat(),
+        'Service': 'AMPI Weight API',
+        'Version': '1.0.0'
+    })
 
 def parse_weight_data(raw_data):
     """
@@ -146,55 +206,6 @@ def initialize_serial(port_name='COM1', baud_rate=9600):  # Default to COM1
         print(f"Error initializing serial port: {e}")
         return False
 
-# API endpoints
-@app.route('/api/weight', methods=['GET'])
-def get_weight_data():
-    """Get recent weight data"""
-    with data_lock:
-        if latest_data:
-            return jsonify({
-                'Success': True,
-                'Message': 'Weight data retrieved successfully',
-                'Data': [latest_data],
-                'Count': 1,
-                'Timestamp': datetime.now().isoformat()
-            })
-        else:
-            return jsonify({
-                'Success': False,
-                'Error': 'No weight data available',
-                'Timestamp': datetime.now().isoformat()
-            }), 404
-
-@app.route('/api/weight/latest', methods=['GET'])
-def get_latest_weight_data():
-    """Get latest weight data"""
-    with data_lock:
-        if latest_data:
-            return jsonify({
-                'Success': True,
-                'Message': 'Latest weight data retrieved successfully',
-                'Data': latest_data,
-                'Timestamp': datetime.now().isoformat()
-            })
-        else:
-            return jsonify({
-                'Success': False,
-                'Error': 'No weight data available',
-                'Timestamp': datetime.now().isoformat()
-            }), 404
-
-@app.route('/api/weight/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    port_status = "connected" if serial_port and serial_port.is_open else "disconnected"
-    return jsonify({
-        'Status': 'Healthy',
-        'Timestamp': datetime.now().isoformat(),
-        'Service': 'AMPI Weight API',
-        'Version': '1.0.0'
-    })
-
 if __name__ == '__main__':
     # Default to COM1 as requested
     serial_config = {
@@ -218,6 +229,7 @@ if __name__ == '__main__':
         print("-" * 50)
         
         from waitress import serve
+        from flask import request  # Add this import
         serve(app, host='0.0.0.0', port=5000)
         
     else:
