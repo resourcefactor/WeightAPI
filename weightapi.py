@@ -8,15 +8,51 @@ import threading
 import time
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend access
+CORS(app)
 
 # Global variable for latest data
 latest_data = None
 data_lock = threading.Lock()
 serial_port = None
 
+def parse_weight_data(raw_data):
+    """
+    Parse A9 indicator weight data according to the protocol
+    Raw data format like: +00000001B, +00123456B, etc.
+    """
+    try:
+        # Extract weight patterns: + followed by digits ending with letter
+        matches = re.findall(r'\+\d+[A-Za-z]', raw_data)
+        if not matches:
+            return None, None
+        
+        # Take the first complete weight reading
+        weight_string = matches[0]
+        
+        # Extract numeric part (remove + and status character)
+        numeric_part = weight_string[1:-1]  # Remove + and status character
+        status_char = weight_string[-1].upper()  # Status character (B, U, etc.)
+        
+        # Parse weight value (assuming format is always in grams/kilograms)
+        # Remove leading zeros and convert to float
+        weight_value = float(numeric_part.lstrip('0') or '0')
+        
+        # Convert to kilograms (assuming the raw data is in grams)
+        # A9 indicators often send data in grams, divide by 1000 for KG
+        weight_kg = weight_value / 1000.0
+        
+        # Determine stability based on status character
+        # According to A9 protocol, 'B' often means stable, 'U' means unstable
+        is_stable = status_char == 'B'  # Adjust based on actual protocol
+        
+        return weight_kg, is_stable
+        
+    except Exception as e:
+        print(f"Error parsing weight data: {e}")
+        return None, None
+
 def clean_serial_data(raw_data):
-    """Extract only patterns that start with +, have digits, and end with a letter"""
+    """Extract weight patterns from raw serial data"""
     try:
         matches = re.findall(r'\+\d+[A-Za-z]', raw_data)
         if matches:
@@ -35,33 +71,41 @@ def read_serial_data():
     while True:
         try:
             if serial_port and serial_port.is_open:
-                # Read all available data
                 if serial_port.in_waiting > 0:
                     raw_data = serial_port.read(serial_port.in_waiting).decode('utf-8', errors='ignore')
                     buffer += raw_data
                     last_received_time = time.time()
                     
-                    # Process whenever we have data
                     if buffer.strip():
                         cleaned_data = clean_serial_data(buffer)
                         
                         if cleaned_data:
+                            # Parse the weight data
+                            weight_value, is_stable = parse_weight_data(cleaned_data)
+                            
                             with data_lock:
-                                # Update latest data with current timestamp
                                 latest_data = {
-                                    'data': cleaned_data,
-                                    'timestamp': datetime.now().isoformat()
+                                    'Data': cleaned_data,  # Keep raw data
+                                    'Timestamp': datetime.now().isoformat(),
+                                    'WeightValue': weight_value,  # Parsed weight in KG
+                                    'IsStable': is_stable       # Stability status
                                 }
                             
-                            # Update console display with timestamp (single line)
+                            # Format display: show weight with stability
                             current_time = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-                            print(f"\r[{current_time}] {cleaned_data}", end='', flush=True)
+                            if weight_value is not None:
+                                # Show formatted weight: "1.234 kg (Stable)" or "12.345 kg (Unstable)"
+                                display_weight = f"{weight_value:.3f} kg"
+                                stability_text = "Stable" if is_stable else "Unstable"
+                                display_text = f"{display_weight} ({stability_text})"
+                            else:
+                                display_text = cleaned_data
+                            
+                            print(f"\r[{current_time}] {display_text}", end='', flush=True)
                     
-                    # Reset buffer after processing
                     buffer = ""
                     last_received_time = time.time()
                 else:
-                    # Small delay when no data available
                     time.sleep(0.01)
             else:
                 time.sleep(0.5)
@@ -70,7 +114,7 @@ def read_serial_data():
             print(f"\nError reading serial data: {e}")
             time.sleep(1)
 
-def initialize_serial(port_name='COM1', baud_rate=9600):
+def initialize_serial(port_name='COM1', baud_rate=9600):  # Default to COM1
     """Initialize serial port connection"""
     global serial_port
     
@@ -102,63 +146,77 @@ def initialize_serial(port_name='COM1', baud_rate=9600):
         print(f"Error initializing serial port: {e}")
         return False
 
-# Single API endpoint
-@app.route('/api/current', methods=['GET'])
-def get_current_data():
-    """Get the latest received data"""
+# API endpoints
+@app.route('/api/weight', methods=['GET'])
+def get_weight_data():
+    """Get recent weight data"""
     with data_lock:
         if latest_data:
             return jsonify({
-                'success': True,
-                'data': latest_data,
-                'timestamp': datetime.now().isoformat()
+                'Success': True,
+                'Message': 'Weight data retrieved successfully',
+                'Data': [latest_data],
+                'Count': 1,
+                'Timestamp': datetime.now().isoformat()
             })
         else:
             return jsonify({
-                'success': False,
-                'message': 'No data available yet',
-                'timestamp': datetime.now().isoformat()
+                'Success': False,
+                'Error': 'No weight data available',
+                'Timestamp': datetime.now().isoformat()
             }), 404
 
-@app.route('/api/health', methods=['GET'])
+@app.route('/api/weight/latest', methods=['GET'])
+def get_latest_weight_data():
+    """Get latest weight data"""
+    with data_lock:
+        if latest_data:
+            return jsonify({
+                'Success': True,
+                'Message': 'Latest weight data retrieved successfully',
+                'Data': latest_data,
+                'Timestamp': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                'Success': False,
+                'Error': 'No weight data available',
+                'Timestamp': datetime.now().isoformat()
+            }), 404
+
+@app.route('/api/weight/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     port_status = "connected" if serial_port and serial_port.is_open else "disconnected"
     return jsonify({
-        'status': 'healthy',
-        'service': 'AMPI Weight API',
-        'serial_port': port_status,
-        'timestamp': datetime.now().isoformat()
+        'Status': 'Healthy',
+        'Timestamp': datetime.now().isoformat(),
+        'Service': 'AMPI Weight API',
+        'Version': '1.0.0'
     })
 
 if __name__ == '__main__':
-    # Initialize serial port - UPDATE THIS TO YOUR COM PORT
+    # Default to COM1 as requested
     serial_config = {
-        'port_name': 'COM1',  # ⚠️ CHANGE THIS TO YOUR ACTUAL COM PORT
-        'baud_rate': 9600     # ⚠️ CHANGE BAUD RATE IF NEEDED
+        'port_name': 'COM1',  # Default COM1
+        'baud_rate': 9600
     }
     
-    # Clear console and set up display
-    print("\033c", end="")  # Clear console
-    print("AMPI Weight Monitor - Real-time Serial Data + API")
-    print("=" * 60)
-    print("Terminal: Real-time serial data (updating line)")
-    print("API: http://localhost:5000/api/current")
-    print("Health: http://localhost:5000/api/health")
-    print("=" * 60)
-    print("Waiting for serial data...")
+    print("\033c", end="")
+    print("A9 Weight Indicator - Formatted Display")
+    print("=" * 50)
+    print("Display: Weight in kg with stability status")
+    print("API: http://localhost:5000/api/weight/latest")
+    print("=" * 50)
+    print("Waiting for A9 indicator data...")
     
     if initialize_serial(serial_config['port_name'], serial_config['baud_rate']):
-        # Start serial reading in a separate thread
         serial_thread = threading.Thread(target=read_serial_data, daemon=True)
         serial_thread.start()
         
-        # Start Flask app in main thread (no console output from API calls)
         print("Starting API server on http://localhost:5000")
-        print("API calls will not interrupt terminal display")
-        print("-" * 60)
+        print("-" * 50)
         
-        # Run Flask without development messages
         from waitress import serve
         serve(app, host='0.0.0.0', port=5000)
         
