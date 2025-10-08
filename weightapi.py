@@ -8,6 +8,24 @@ import time
 
 from flask import Flask, jsonify, request
 import functools
+import logging  # Add this import
+
+app = Flask(__name__)
+CORS(app)
+
+# Disable Flask's default access logs
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
+# Optional: Keep your application logs but disable Flask's noise
+app.logger.disabled = True
+logging.getLogger('flask').setLevel(logging.ERROR)
+
+# Global variables to store data
+latest_data = None
+last_changed_data = None
+data_lock = threading.Lock()
+serial_port = None
 
 def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -25,13 +43,6 @@ def handle_options():
         response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         return response
-
-app = Flask(__name__)
-
-# Global variable for latest data
-latest_data = None
-data_lock = threading.Lock()
-serial_port = None
 
 # Comprehensive CORS handling
 @app.after_request
