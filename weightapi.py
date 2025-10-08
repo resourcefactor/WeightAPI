@@ -1,6 +1,6 @@
 import serial
 import serial.tools.list_ports
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
 from datetime import datetime
 import re
 import threading
@@ -13,20 +13,21 @@ latest_data = None
 data_lock = threading.Lock()
 serial_port = None
 
-# Manual CORS handling
+# Comprehensive CORS handling
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
     return response
 
-# Handle OPTIONS requests for all routes
 @app.route('/api/weight', methods=['GET', 'OPTIONS'])
 def get_weight_data():
     """Get recent weight data"""
     if request.method == 'OPTIONS':
-        return '', 200
+        response = jsonify({'status': 'ok'})
+        return response
         
     with data_lock:
         if latest_data:
@@ -48,7 +49,8 @@ def get_weight_data():
 def get_latest_weight_data():
     """Get latest weight data"""
     if request.method == 'OPTIONS':
-        return '', 200
+        response = jsonify({'status': 'ok'})
+        return response
         
     with data_lock:
         if latest_data:
@@ -69,7 +71,8 @@ def get_latest_weight_data():
 def health_check():
     """Health check endpoint"""
     if request.method == 'OPTIONS':
-        return '', 200
+        response = jsonify({'status': 'ok'})
+        return response
         
     port_status = "connected" if serial_port and serial_port.is_open else "disconnected"
     return jsonify({
@@ -232,11 +235,11 @@ if __name__ == '__main__':
         serial_thread = threading.Thread(target=read_serial_data, daemon=True)
         serial_thread.start()
         
-        print("Starting Flask development server on http://localhost:5000")
+        print("Starting Flask server on http://localhost:5000")
         print("Press Ctrl+C to stop the application")
         print("-" * 50)
         
-        # Use Flask development server
+        # Use Flask development server with specific settings
         app.run(host='0.0.0.0', port=5000, debug=False)
         
     else:
