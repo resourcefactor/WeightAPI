@@ -1,10 +1,30 @@
 import serial
 import serial.tools.list_ports
-from flask import Flask, jsonify
+#from flask import Flask, jsonify, request  # Added request import
 from datetime import datetime
 import re
 import threading
 import time
+
+from flask import Flask, jsonify, request
+import functools
+
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
+
+app.after_request(add_cors_headers)
+
+@app.before_request
+def handle_options():
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        return response
 
 app = Flask(__name__)
 
@@ -239,7 +259,7 @@ if __name__ == '__main__':
         print("Press Ctrl+C to stop the application")
         print("-" * 50)
         
-        # Use Flask development server with specific settings
+        # Use Flask development server
         app.run(host='0.0.0.0', port=5000, debug=False)
         
     else:
