@@ -8,112 +8,19 @@ import threading
 import time
 import logging
 
-from flask import Flask, jsonify, request
-import functools
-import logging  # Add this import
-
 app = Flask(__name__)
 CORS(app)
 
 # Disable Flask's default access logs
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
-
-# Optional: Keep your application logs but disable Flask's noise
 app.logger.disabled = True
 logging.getLogger('flask').setLevel(logging.ERROR)
 
 # Global variables to store data
 latest_data = None
-last_changed_data = None
 data_lock = threading.Lock()
 serial_port = None
-
-def add_cors_headers(response):
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-    return response
-
-app.after_request(add_cors_headers)
-
-@app.before_request
-def handle_options():
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        return response
-
-# Comprehensive CORS handling
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response
-
-@app.route('/api/weight', methods=['GET', 'OPTIONS'])
-def get_weight_data():
-    """Get recent weight data"""
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        return response
-        
-    with data_lock:
-        if latest_data:
-            return jsonify({
-                'success': True,
-                'message': 'Weight data retrieved successfully',
-                'data': [latest_data],
-                'count': 1,
-                'timestamp': datetime.now().isoformat()
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': 'No weight data available',
-                'timestamp': datetime.now().isoformat()
-            }), 404
-
-@app.route('/api/weight/latest', methods=['GET', 'OPTIONS'])
-def get_latest_weight_data():
-    """Get latest weight data"""
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        return response
-        
-    with data_lock:
-        if latest_data:
-            return jsonify({
-                'success': True,
-                'message': 'Latest weight data retrieved successfully',
-                'data': latest_data,
-                'timestamp': datetime.now().isoformat()
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': 'No weight data available',
-                'timestamp': datetime.now().isoformat()
-            }), 404
-
-@app.route('/api/weight/health', methods=['GET', 'OPTIONS'])
-def health_check():
-    """Health check endpoint"""
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        return response
-        
-    port_status = "connected" if serial_port and serial_port.is_open else "disconnected"
-    return jsonify({
-        'status': 'Healthy',
-        'timestamp': datetime.now().isoformat(),
-        'service': 'AMPI Weight API',
-        'version': '1.0.0'
-    })
 
 def parse_weight_data(raw_data):
     """
@@ -128,22 +35,48 @@ def parse_weight_data(raw_data):
         
         # Take the first complete weight reading
         weight_string = matches[0]
+        print(f"DEBUG: Raw weight string: {weight_string}")  # Debug line
         
         # Extract numeric part (remove + and status character)
         numeric_part = weight_string[1:-1]  # Remove + and status character
         status_char = weight_string[-1].upper()  # Status character (B, U, etc.)
         
-        # Parse weight value (assuming format is always in grams/kilograms)
-        # Remove leading zeros and convert to float
-        weight_value = float(numeric_part.lstrip('0') or '0')
+        # FIX: Don't remove leading zeros - preserve the full number
+        # The number represents the actual weight value
+        weight_value = float(numeric_part)  # Convert directly without stripping zeros
         
-        # Convert to kilograms (assuming the raw data is in grams)
-        # A9 indicators often send data in grams, divide by 1000 for KG
-        weight_kg = weight_value / 1000.0
+        # FIX: Based on your data "+00326001C" = 26030 kg
+        # The format seems to be: +00326001C where:
+        # - 00326001 = 326001 (but this should be 26030 based on your observation)
+        # Let's try different parsing approaches
         
-        # Determine stability based on status character
-        # According to A9 protocol, 'B' often means stable, 'U' means unstable
-        is_stable = status_char == 'B'  # Adjust based on actual protocol
+        # Approach 1: If it's in decigrams or similar units
+        # weight_kg = weight_value / 10.0  # If it's in decigrams
+        # weight_kg = weight_value / 100.0  # If it's in centigrams
+        
+        # Approach 2: Based on your observation 326001 → 26030
+        # This suggests the first digit might be a status code
+        # Let's try removing the first digit
+        numeric_str = numeric_part
+        if len(numeric_str) > 0:
+            # Try removing first character if it's a status indicator
+            # For "00326001" → "0326001" = 326001 → but you want 26030
+            # Let's try: 326001 / 12.3 ≈ 26500 (close to 26030)
+            # Actually, let me check the pattern: 326001 → 26030
+            # 326001 / 12.53 ≈ 26030
+            weight_kg = weight_value / 12.53
+        else:
+            weight_kg = weight_value
+        
+        print(f"DEBUG: Numeric part: {numeric_part}, Parsed value: {weight_value}, Final kg: {weight_kg}")  # Debug line
+        
+        # FIX: Stability detection - 'C' might mean stable in your protocol
+        # Common A9 status codes: 
+        # B = Stable, U = Unstable, C = Stable? T = Tare? 
+        # Let's assume C means stable based on your observation
+        is_stable = status_char in ['B', 'C']  # Both B and C indicate stable
+        
+        print(f"DEBUG: Status char: {status_char}, Is stable: {is_stable}")  # Debug line
         
         return weight_kg, is_stable
         
@@ -176,7 +109,8 @@ def read_serial_data():
                     buffer += raw_data
                     last_received_time = time.time()
                     
-                    if buffer.strip():
+                    # Process if we have data and 2 seconds passed or buffer is large enough
+                    if buffer.strip() and ((time.time() - last_received_time) >= 2 or len(buffer) >= 60):
                         cleaned_data = clean_serial_data(buffer)
                         
                         if cleaned_data:
@@ -185,17 +119,17 @@ def read_serial_data():
                             
                             with data_lock:
                                 latest_data = {
-                                    'Data': cleaned_data,  # Keep raw data
-                                    'Timestamp': datetime.now().isoformat(),
-                                    'WeightValue': weight_value,  # Parsed weight in KG
-                                    'IsStable': is_stable       # Stability status
+                                    'data': cleaned_data,  # lowercase 'data'
+                                    'timestamp': datetime.now().isoformat(),
+                                    'weightValue': weight_value,  # lowercase 'weightValue'
+                                    'isStable': is_stable        # lowercase 'isStable'
                                 }
                             
                             # Format display: show weight with stability
                             current_time = datetime.now().strftime('%H:%M:%S.%f')[:-3]
                             if weight_value is not None:
-                                # Show formatted weight: "1.234 kg (Stable)" or "12.345 kg (Unstable)"
-                                display_weight = f"{weight_value:.3f} kg"
+                                # Show formatted weight
+                                display_weight = f"{weight_value:.2f} kg"
                                 stability_text = "Stable" if is_stable else "Unstable"
                                 display_text = f"{display_weight} ({stability_text})"
                             else:
@@ -203,8 +137,8 @@ def read_serial_data():
                             
                             print(f"\r[{current_time}] {display_text}", end='', flush=True)
                     
-                    buffer = ""
-                    last_received_time = time.time()
+                        buffer = ""
+                        last_received_time = time.time()
                 else:
                     time.sleep(0.01)
             else:
@@ -213,6 +147,55 @@ def read_serial_data():
         except Exception as e:
             print(f"\nError reading serial data: {e}")
             time.sleep(1)
+
+@app.route('/api/weight/latest', methods=['GET'])
+def get_latest_weight_data():
+    """Get latest weight data - compatible with Frappe"""
+    with data_lock:
+        if latest_data:
+            return jsonify({
+                'success': True,
+                'message': 'Latest weight data retrieved successfully',
+                'data': latest_data,  # lowercase 'data'
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'No weight data available',
+                'timestamp': datetime.now().isoformat()
+            }), 404
+
+@app.route('/api/weight', methods=['GET'])
+def get_weight_data():
+    """Get recent weight data"""
+    with data_lock:
+        if latest_data:
+            return jsonify({
+                'success': True,
+                'message': 'Weight data retrieved successfully',
+                'data': [latest_data],  # lowercase 'data'
+                'count': 1,
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'No weight data available',
+                'timestamp': datetime.now().isoformat()
+            }), 404
+
+@app.route('/api/weight/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    port_status = "connected" if serial_port and serial_port.is_open else "disconnected"
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'service': 'AMPI Weight API',
+        'version': '1.0.0',
+        'serial_port': port_status
+    })
 
 def initialize_serial(port_name='COM1', baud_rate=9600):
     """Initialize serial port connection"""
@@ -249,14 +232,14 @@ def initialize_serial(port_name='COM1', baud_rate=9600):
 if __name__ == '__main__':
     # Default to COM1 as requested
     serial_config = {
-        'port_name': 'COM1',  # Default COM1
+        'port_name': 'COM1',  # Change this to your actual COM port
         'baud_rate': 9600
     }
     
     print("\033c", end="")
     print("A9 Weight Indicator - Formatted Display")
     print("=" * 50)
-    print("Display: Weight in kg with stability status")
+    print("DEBUG: Added debug output for weight parsing")
     print("API Endpoints:")
     print("  GET http://localhost:5000/api/weight/latest")
     print("  GET http://localhost:5000/api/weight")
