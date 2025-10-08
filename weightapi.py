@@ -1,10 +1,12 @@
 import serial
 import serial.tools.list_ports
-#from flask import Flask, jsonify, request  # Added request import
+from flask import Flask, jsonify
+from flask_cors import CORS
 from datetime import datetime
 import re
 import threading
 import time
+import logging
 
 from flask import Flask, jsonify, request
 import functools
@@ -63,17 +65,17 @@ def get_weight_data():
     with data_lock:
         if latest_data:
             return jsonify({
-                'Success': True,
-                'Message': 'Weight data retrieved successfully',
-                'Data': [latest_data],
-                'Count': 1,
-                'Timestamp': datetime.now().isoformat()
+                'success': True,
+                'message': 'Weight data retrieved successfully',
+                'data': [latest_data],
+                'count': 1,
+                'timestamp': datetime.now().isoformat()
             })
         else:
             return jsonify({
-                'Success': False,
-                'Error': 'No weight data available',
-                'Timestamp': datetime.now().isoformat()
+                'success': False,
+                'error': 'No weight data available',
+                'timestamp': datetime.now().isoformat()
             }), 404
 
 @app.route('/api/weight/latest', methods=['GET', 'OPTIONS'])
@@ -86,16 +88,16 @@ def get_latest_weight_data():
     with data_lock:
         if latest_data:
             return jsonify({
-                'Success': True,
-                'Message': 'Latest weight data retrieved successfully',
-                'Data': latest_data,
-                'Timestamp': datetime.now().isoformat()
+                'success': True,
+                'message': 'Latest weight data retrieved successfully',
+                'data': latest_data,
+                'timestamp': datetime.now().isoformat()
             })
         else:
             return jsonify({
-                'Success': False,
-                'Error': 'No weight data available',
-                'Timestamp': datetime.now().isoformat()
+                'success': False,
+                'error': 'No weight data available',
+                'timestamp': datetime.now().isoformat()
             }), 404
 
 @app.route('/api/weight/health', methods=['GET', 'OPTIONS'])
@@ -107,10 +109,10 @@ def health_check():
         
     port_status = "connected" if serial_port and serial_port.is_open else "disconnected"
     return jsonify({
-        'Status': 'Healthy',
-        'Timestamp': datetime.now().isoformat(),
-        'Service': 'AMPI Weight API',
-        'Version': '1.0.0'
+        'status': 'Healthy',
+        'timestamp': datetime.now().isoformat(),
+        'service': 'AMPI Weight API',
+        'version': '1.0.0'
     })
 
 def parse_weight_data(raw_data):
