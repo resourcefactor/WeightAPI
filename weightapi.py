@@ -1,6 +1,6 @@
 import serial
 import serial.tools.list_ports
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from datetime import datetime
 import re
 import threading
@@ -21,11 +21,13 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response
 
+# Handle OPTIONS requests for all routes
 @app.route('/api/weight', methods=['GET', 'OPTIONS'])
 def get_weight_data():
     """Get recent weight data"""
     if request.method == 'OPTIONS':
         return '', 200
+        
     with data_lock:
         if latest_data:
             return jsonify({
@@ -47,6 +49,7 @@ def get_latest_weight_data():
     """Get latest weight data"""
     if request.method == 'OPTIONS':
         return '', 200
+        
     with data_lock:
         if latest_data:
             return jsonify({
@@ -67,6 +70,7 @@ def health_check():
     """Health check endpoint"""
     if request.method == 'OPTIONS':
         return '', 200
+        
     port_status = "connected" if serial_port and serial_port.is_open else "disconnected"
     return jsonify({
         'Status': 'Healthy',
@@ -174,7 +178,7 @@ def read_serial_data():
             print(f"\nError reading serial data: {e}")
             time.sleep(1)
 
-def initialize_serial(port_name='COM1', baud_rate=9600):  # Default to COM1
+def initialize_serial(port_name='COM1', baud_rate=9600):
     """Initialize serial port connection"""
     global serial_port
     
@@ -217,7 +221,10 @@ if __name__ == '__main__':
     print("A9 Weight Indicator - Formatted Display")
     print("=" * 50)
     print("Display: Weight in kg with stability status")
-    print("API: http://localhost:5000/api/weight/latest")
+    print("API Endpoints:")
+    print("  GET http://localhost:5000/api/weight/latest")
+    print("  GET http://localhost:5000/api/weight")
+    print("  GET http://localhost:5000/api/weight/health")
     print("=" * 50)
     print("Waiting for A9 indicator data...")
     
@@ -225,12 +232,12 @@ if __name__ == '__main__':
         serial_thread = threading.Thread(target=read_serial_data, daemon=True)
         serial_thread.start()
         
-        print("Starting API server on http://localhost:5000")
+        print("Starting Flask development server on http://localhost:5000")
+        print("Press Ctrl+C to stop the application")
         print("-" * 50)
         
-        from waitress import serve
-        from flask import request  # Add this import
-        serve(app, host='0.0.0.0', port=5000)
+        # Use Flask development server
+        app.run(host='0.0.0.0', port=5000, debug=False)
         
     else:
         print("Failed to initialize serial port")
