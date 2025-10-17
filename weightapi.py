@@ -22,6 +22,26 @@ logging.getLogger('flask').setLevel(logging.ERROR)
 serial_port = None
 data_lock = threading.Lock()
 
+def log_api_data(api_endpoint, raw_data, parsed_data, success=True, error_message=None):
+    """
+    Log API call data to apidata.txt file
+    """
+    try:
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        
+        with open('apidata.txt', 'a', encoding='utf-8') as f:
+            f.write(f"=== API Call: {api_endpoint} ===\n")
+            f.write(f"DateTime: {timestamp}\n")
+            f.write(f"RawData: {raw_data}\n")
+            f.write(f"ParsedData: {parsed_data}\n")
+            f.write(f"Success: {success}\n")
+            if error_message:
+                f.write(f"Error: {error_message}\n")
+            f.write("-" * 50 + "\n")
+            
+    except Exception as e:
+        print(f"Error writing to log file: {e}")
+
 def parse_weight_data(raw_data):
     """
     Parse A9 indicator weight data according to the actual protocol from debug log
@@ -156,6 +176,7 @@ def read_serial_data_continuous():
             error_time = datetime.now().strftime('%H:%M:%S')
             print(f"\r[{error_time}] Serial Error: {e}", end='', flush=True)
             time.sleep(1)
+
 def read_from_serial_with_timeout(timeout=2.0):
     """
     Read from serial port with configurable timeout for API calls
@@ -226,7 +247,6 @@ def clear_serial_buffer():
         except:
             pass
 
-# [Keep all your API endpoints exactly the same - they're perfect!]
 @app.route('/api/weight/latest', methods=['GET'])
 def get_latest_weight_data():
     """Get latest weight data - read fresh from scale on each request"""
@@ -249,6 +269,10 @@ def get_latest_weight_data():
                     'isStable': is_stable
                 }
                 
+                # Log successful API call
+                parsed_data = f"Weight: {weight_value:.3f} kg, Stable: {is_stable}"
+                log_api_data('/api/weight/latest', raw_data, parsed_data, success=True)
+                
                 return jsonify({
                     'success': True,
                     'message': 'Weight data retrieved successfully',
@@ -257,22 +281,30 @@ def get_latest_weight_data():
                 })
             else:
                 # Failed to parse - include both 'data' and 'rawData' with same value
+                error_msg = 'Failed to parse weight data'
+                log_api_data('/api/weight/latest', raw_data, 'None', success=False, error_message=error_msg)
+                
                 return jsonify({
                     'success': False,
-                    'error': 'Failed to parse weight data',
+                    'error': error_msg,
                     'data': raw_data,  # Add this line
                     'rawData': raw_data,
                     'timestamp': datetime.now().isoformat()
                 }), 422  # Unprocessable Entity
         else:
+            error_msg = 'No data received from scale within timeout period'
+            log_api_data('/api/weight/latest', 'None', 'None', success=False, error_message=error_msg)
+            
             return jsonify({
                 'success': False,
-                'error': 'No data received from scale within timeout period',
+                'error': error_msg,
                 'timestamp': datetime.now().isoformat()
             }), 503  # Service Unavailable
             
     except SerialException as e:
         error_msg = f"Serial port error: {str(e)}"
+        log_api_data('/api/weight/latest', 'None', 'None', success=False, error_message=error_msg)
+        
         return jsonify({
             'success': False,
             'error': error_msg,
@@ -281,6 +313,8 @@ def get_latest_weight_data():
         
     except Exception as e:
         error_msg = f"Unexpected error: {str(e)}"
+        log_api_data('/api/weight/latest', 'None', 'None', success=False, error_message=error_msg)
+        
         return jsonify({
             'success': False,
             'error': error_msg,
@@ -318,15 +352,22 @@ def health_check():
                 # Try to parse to check data quality
                 weight_value, is_stable, _ = parse_weight_data(test_data)
                 health_status['data_quality'] = 'good' if weight_value is not None else 'parse_error'
+                
+                # Log health check with data
+                parsed_data = f"Scale responsive, Data quality: {health_status['data_quality']}"
+                log_api_data('/api/weight/health', test_data, parsed_data, success=True)
             else:
                 health_status['scale_status'] = 'no_response'
+                log_api_data('/api/weight/health', 'None', 'Scale not responding', success=False)
                 
         else:
             health_status['scale_status'] = 'port_closed'
+            log_api_data('/api/weight/health', 'None', 'Serial port not connected', success=False)
             
     except Exception as e:
         health_status['scale_status'] = 'error'
         health_status['error'] = str(e)
+        log_api_data('/api/weight/health', 'None', f'Error: {str(e)}', success=False)
     
     # Determine overall status
     if health_status['serial_port_connected'] and health_status['scale_responding']:
@@ -355,10 +396,18 @@ def list_serial_ports():
                 'description': port.description,
                 'hwid': port.hwid
             })
+        
+        # Log successful port listing
+        parsed_data = f"Found {len(ports)} serial ports"
+        log_api_data('/api/weight/ports', 'N/A', parsed_data, success=True)
+        
     except Exception as e:
+        error_msg = f'Failed to list serial ports: {str(e)}'
+        log_api_data('/api/weight/ports', 'N/A', 'None', success=False, error_message=error_msg)
+        
         return jsonify({
             'success': False,
-            'error': f'Failed to list serial ports: {str(e)}'
+            'error': error_msg
         }), 500
     
     return jsonify({
@@ -454,4 +503,4 @@ if __name__ == '__main__':
         # Start server anyway for port listing functionality
         from waitress import serve
         print("Starting server in limited mode (serial port not available)")
-        serve(app, host='0.0.0.0', port=5000, _quiet=True)
+        serve(app, host='0.0.0.0', port=5000, _quiet=True) 
