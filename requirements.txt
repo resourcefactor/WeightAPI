@@ -1,3 +1,7 @@
 pyserial==3.5
 Flask==2.3.3
 Flask-CORS==4.0.0
+flask-socketio==5.3.4
+python-socketio==5.9.0
+eventlet==0.33.3
+waitress==2.1.2

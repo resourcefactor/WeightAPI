@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weight API WebSocket Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .weight-display {
+            font-size: 48px;
+            font-weight: bold;
+            color: #007bff;
+            text-align: center;
+            padding: 30px;
+            margin: 20px 0;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        .stability {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            margin-left: 10px;
+        }
+        .stability.stable {
+            background-color: #28a745;
+            color: white;
+        }
+        .stability.unstable {
+            background-color: #ffc107;
+            color: #000;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .log {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid #007bff;
+            padding-left: 10px;
+        }
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #007bff;
+            padding: 15px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏋️ Weight API WebSocket Client</h1>
+
+        <div class="info-box">
+            <strong>Instructions:</strong><br>
+            1. Make sure the Weight API server is running<br>
+            2. Click "Connect to WebSocket" to establish connection<br>
+            3. Weight data will stream automatically in real-time<br>
+            4. You can also request weight data manually
+        </div>
+
+        <div id="status" class="status disconnected">Disconnected</div>
+
+        <div class="weight-display" id="weightDisplay">
+            -- kg
+        </div>
+
+        <div style="text-align: center;">
+            <button id="connectBtn" onclick="connectWebSocket()">Connect to WebSocket</button>
+            <button id="disconnectBtn" onclick="disconnectWebSocket()" disabled>Disconnect</button>
+            <button id="requestBtn" onclick="requestWeight()" disabled>Request Weight</button>
+        </div>
+
+        <h3>Activity Log</h3>
+        <div class="log" id="log"></div>
+    </div>
+
+    <!-- Socket.IO Client Library -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+
+    <script>
+        let socket = null;
+        const serverUrl = 'http://localhost:5000';  // Change this if your server is on a different address
+
+        function addLog(message, type = 'info') {
+            const log = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<strong>[${timestamp}]</strong> ${message}`;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+        }
+
+        function updateStatus(connected) {
+            const statusDiv = document.getElementById('status');
+            const connectBtn = document.getElementById('connectBtn');
+            const disconnectBtn = document.getElementById('disconnectBtn');
+            const requestBtn = document.getElementById('requestBtn');
+
+            if (connected) {
+                statusDiv.className = 'status connected';
+                statusDiv.textContent = '✓ Connected to WebSocket';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                requestBtn.disabled = false;
+            } else {
+                statusDiv.className = 'status disconnected';
+                statusDiv.textContent = '✗ Disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                requestBtn.disabled = true;
+            }
+        }
+
+        function updateWeightDisplay(data) {
+            const display = document.getElementById('weightDisplay');
+            const stabilityClass = data.isStable ? 'stable' : 'unstable';
+            const stabilityText = data.isStable ? 'Stable' : 'Unstable';
+
+            display.innerHTML = `
+                ${data.weightValue.toFixed(3)} kg
+                <span class="stability ${stabilityClass}">${stabilityText}</span>
+            `;
+        }
+
+        function connectWebSocket() {
+            addLog('Attempting to connect to WebSocket server...');
+
+            socket = io(serverUrl, {
+                transports: ['websocket', 'polling'],
+                reconnection: true,
+                reconnectionDelay: 1000,
+                reconnectionAttempts: 5
+            });
+
+            socket.on('connect', () => {
+                addLog('✓ Successfully connected to WebSocket server', 'success');
+                updateStatus(true);
+            });
+
+            socket.on('connection_response', (data) => {
+                addLog(`Server response: ${data.message}`);
+            });
+
+            socket.on('disconnect', () => {
+                addLog('✗ Disconnected from WebSocket server', 'error');
+                updateStatus(false);
+            });
+
+            socket.on('weight_update', (data) => {
+                if (data.success) {
+                    updateWeightDisplay(data.data);
+                    addLog(`Weight: ${data.data.weightValue.toFixed(3)} kg (${data.data.isStable ? 'Stable' : 'Unstable'})`);
+                }
+            });
+
+            socket.on('weight_data', (data) => {
+                if (data.success) {
+                    updateWeightDisplay(data.data);
+                    addLog(`Manual request - Weight: ${data.data.weightValue.toFixed(3)} kg`);
+                } else {
+                    addLog(`Error: ${data.error}`, 'error');
+                }
+            });
+
+            socket.on('connect_error', (error) => {
+                addLog(`Connection error: ${error.message}`, 'error');
+                updateStatus(false);
+            });
+        }
+
+        function disconnectWebSocket() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+                addLog('Disconnected from server');
+                updateStatus(false);
+            }
+        }
+
+        function requestWeight() {
+            if (socket && socket.connected) {
+                addLog('Requesting current weight data...');
+                socket.emit('request_weight');
+            } else {
+                addLog('Error: Not connected to server', 'error');
+            }
+        }
+
+        // Initialize
+        addLog('Page loaded. Click "Connect to WebSocket" to start.');
+    </script>
+</body>
+</html>

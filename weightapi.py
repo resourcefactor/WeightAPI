@@ -3,6 +3,7 @@ import serial.tools.list_ports
 from serial import SerialException
 from flask import Flask, jsonify
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 from datetime import datetime
 import re
 import time
@@ -10,7 +11,10 @@ import logging
 import threading
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Initialize SocketIO with CORS support
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=False)
 
 # Disable Flask's default access logs
 log = logging.getLogger('werkzeug')
@@ -21,6 +25,64 @@ logging.getLogger('flask').setLevel(logging.ERROR)
 # Global variables
 serial_port = None
 data_lock = threading.Lock()
+connected_clients = 0
+
+# WebSocket event handlers
+@socketio.on('connect')
+def handle_connect():
+    """Handle WebSocket client connection"""
+    global connected_clients
+    connected_clients += 1
+    print(f"\n[WebSocket] Client connected. Total clients: {connected_clients}")
+    emit('connection_response', {
+        'status': 'connected',
+        'message': 'Successfully connected to Weight API WebSocket',
+        'timestamp': datetime.now().isoformat()
+    })
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle WebSocket client disconnection"""
+    global connected_clients
+    connected_clients -= 1
+    print(f"\n[WebSocket] Client disconnected. Total clients: {connected_clients}")
+
+@socketio.on('request_weight')
+def handle_weight_request():
+    """Handle manual weight data request via WebSocket"""
+    try:
+        clear_serial_buffer()
+        raw_data = read_from_serial_with_timeout(timeout=2.0)
+
+        if raw_data:
+            weight_value, is_stable, raw_string = parse_weight_data(raw_data)
+
+            if weight_value is not None:
+                emit('weight_data', {
+                    'success': True,
+                    'data': {
+                        'data': raw_data,
+                        'timestamp': datetime.now().isoformat(),
+                        'weightValue': weight_value,
+                        'isStable': is_stable
+                    }
+                })
+            else:
+                emit('weight_data', {
+                    'success': False,
+                    'error': 'Failed to parse weight data',
+                    'rawData': raw_data
+                })
+        else:
+            emit('weight_data', {
+                'success': False,
+                'error': 'No data received from scale within timeout period'
+            })
+    except Exception as e:
+        emit('weight_data', {
+            'success': False,
+            'error': str(e)
+        })
 
 def log_api_data(api_endpoint, raw_data, parsed_data, success=True, error_message=None):
     """
@@ -130,47 +192,59 @@ def read_serial_data_continuous():
     """Continuously read and display data from serial port in real-time"""
     if not serial_port or not serial_port.is_open:
         return
-    
+
     buffer = b""  # Use bytes buffer for STX/ETX detection
-    
+
     while True:
         try:
             if serial_port.in_waiting > 0:
                 raw_data = serial_port.read(serial_port.in_waiting)
                 buffer += raw_data
-                
+
                 # Process complete messages using STX/ETX framing
                 while b'\x02' in buffer and b'\x03' in buffer:
                     stx_pos = buffer.find(b'\x02')
                     etx_pos = buffer.find(b'\x03', stx_pos)
-                    
+
                     if etx_pos > stx_pos:
                         # Extract message between STX and ETX
                         message_bytes = buffer[stx_pos+1:etx_pos]
-                        
+
                         try:
                             message = message_bytes.decode('ascii', errors='ignore')
-                            
+
                             if message and len(message) >= 9:  # Only process valid length messages
                                 # Parse the weight data
                                 weight_value, is_stable, raw_string = parse_weight_data(message)
-                                
+
                                 if weight_value is not None:
                                     # Update the terminal display only if parsing was successful
                                     update_terminal_display(weight_value, is_stable, message)
+
+                                    # Emit real-time data to all connected WebSocket clients
+                                    if connected_clients > 0:
+                                        socketio.emit('weight_update', {
+                                            'success': True,
+                                            'data': {
+                                                'data': message,
+                                                'timestamp': datetime.now().isoformat(),
+                                                'weightValue': weight_value,
+                                                'isStable': is_stable
+                                            }
+                                        })
                                 # If parsing failed, don't display anything to avoid scrolling
-                        
+
                         except Exception as e:
                             # Don't print error here to avoid terminal scrolling
                             pass
-                        
+
                         # Remove processed data from buffer (including STX and ETX)
                         buffer = buffer[etx_pos+1:]
                     else:
                         break
-            
+
             time.sleep(0.01)  # Small delay to prevent CPU overload
-                
+
         except Exception as e:
             # Only show serial errors occasionally to avoid scrolling
             error_time = datetime.now().strftime('%H:%M:%S')
@@ -468,30 +542,37 @@ if __name__ == '__main__':
         'port_name': 'COM1',  # Change this to your actual COM port
         'baud_rate': 9600
     }
-    
+
     print("\033c", end="")  # Clear screen
-    print("A9 Weight Indicator - Real-time Monitoring")
-    print("=" * 60)
+    print("A9 Weight Indicator - Real-time Monitoring with WebSocket Support")
+    print("=" * 70)
     print("Real-time display updating on same line...")
-    print("-" * 60)
-    
+    print("-" * 70)
+
     if initialize_serial(serial_config['port_name'], serial_config['baud_rate']):
         try:
             # Start continuous serial reading thread
             serial_thread = threading.Thread(target=read_serial_data_continuous, daemon=True)
             serial_thread.start()
-            
+
             # Give the serial thread a moment to start
             time.sleep(1)
-            
-            # Start Flask server
-            from waitress import serve
-            print("\nAPI Server running on http://localhost:5000/api/weight/latest")
-            print("Press Ctrl+C to stop\n")
-            
-            # Use Waitress for production server
-            serve(app, host='0.0.0.0', port=5000, _quiet=True)
-            
+
+            # Start SocketIO server
+            print("\n" + "=" * 70)
+            print("API Server running on:")
+            print("  - REST API: http://localhost:5000/api/weight/latest")
+            print("  - WebSocket: ws://localhost:5000/socket.io/")
+            print("=" * 70)
+            print("\nWebSocket Events:")
+            print("  - Emit: 'weight_update' (real-time weight data)")
+            print("  - Listen: 'request_weight' (request current weight)")
+            print("=" * 70)
+            print("\nPress Ctrl+C to stop\n")
+
+            # Use SocketIO run for WebSocket support
+            socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
+
         except KeyboardInterrupt:
             print("\nShutting down...")
         finally:
@@ -499,8 +580,8 @@ if __name__ == '__main__':
     else:
         print("Failed to initialize serial port")
         print("You can still use the /api/weight/ports endpoint to see available ports")
-        
+
         # Start server anyway for port listing functionality
-        from waitress import serve
-        print("Starting server in limited mode (serial port not available)")
-        serve(app, host='0.0.0.0', port=5000, _quiet=True) 
+        print("\nStarting server in limited mode (serial port not available)")
+        print("WebSocket Server running on ws://localhost:5000/socket.io/")
+        socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True) 
