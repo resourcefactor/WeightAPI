@@ -13,8 +13,8 @@ import threading
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Initialize SocketIO with CORS support - using eventlet for production
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=False, engineio_logger=False)
+# Initialize SocketIO with CORS support - using threading mode for Python 3.14 compatibility
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=False)
 
 # Disable Flask's default access logs
 log = logging.getLogger('werkzeug')
@@ -570,8 +570,8 @@ if __name__ == '__main__':
             print("=" * 70)
             print("\nPress Ctrl+C to stop\n")
 
-            # Use SocketIO run for WebSocket support with eventlet
-            socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+            # Use SocketIO run with threading mode (works on all Python versions)
+            socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
 
         except KeyboardInterrupt:
             print("\nShutting down...")
@@ -584,4 +584,4 @@ if __name__ == '__main__':
         # Start server anyway for port listing functionality
         print("\nStarting server in limited mode (serial port not available)")
         print("WebSocket Server running on ws://localhost:5000/socket.io/")
-        socketio.run(app, host='0.0.0.0', port=5000, debug=False) 
+        socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True) 
