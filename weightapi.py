@@ -10,22 +10,11 @@ import time
 import logging
 import threading
 
-# Try to use eventlet with monkey patching for production WebSocket support
-async_mode = 'threading'  # Default fallback
-try:
-    import eventlet
-    eventlet.monkey_patch()
-    async_mode = 'eventlet'
-    print("✓ Using eventlet for production WebSocket support")
-except Exception as e:
-    print(f"⚠ Eventlet not available ({e}), using threading mode")
-    print("  Note: For production use, consider Python 3.11 or 3.12 with eventlet")
-
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Initialize SocketIO with CORS support - auto-detect best async mode
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode=async_mode, logger=False, engineio_logger=False)
+# Initialize SocketIO with CORS support - using threading mode for Python 3.14 compatibility
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=False)
 
 # Disable Flask's default access logs
 log = logging.getLogger('werkzeug')
@@ -574,7 +563,6 @@ if __name__ == '__main__':
             print("API Server running on:")
             print("  - REST API: http://localhost:5000/api/weight/latest")
             print("  - WebSocket: ws://localhost:5000/socket.io/")
-            print(f"  - Async Mode: {async_mode}")
             print("=" * 70)
             print("\nWebSocket Events:")
             print("  - Emit: 'weight_update' (real-time weight data)")
@@ -582,13 +570,8 @@ if __name__ == '__main__':
             print("=" * 70)
             print("\nPress Ctrl+C to stop\n")
 
-            # Use SocketIO run - with or without unsafe werkzeug based on mode
-            if async_mode == 'threading':
-                # Threading mode requires unsafe werkzeug flag (Python 3.14 compatibility)
-                socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
-            else:
-                # Eventlet mode - production ready
-                socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+            # Use SocketIO run with threading mode (works on all Python versions)
+            socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
 
         except KeyboardInterrupt:
             print("\nShutting down...")
@@ -600,10 +583,5 @@ if __name__ == '__main__':
 
         # Start server anyway for port listing functionality
         print("\nStarting server in limited mode (serial port not available)")
-        print(f"WebSocket Server running on ws://localhost:5000/socket.io/ (mode: {async_mode})")
-
-        # Use appropriate server mode
-        if async_mode == 'threading':
-            socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
-        else:
-            socketio.run(app, host='0.0.0.0', port=5000, debug=False) 
+        print("WebSocket Server running on ws://localhost:5000/socket.io/")
+        socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True) 
